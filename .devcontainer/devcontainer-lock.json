@@ -5,19 +5,6 @@
       "resolved": "ghcr.io/devcontainers/features/aws-cli@sha256:1f93c8315b7a6d76982ebb2269f8b0d50413fc0f965c032edf4aee0caceb73ef",
       "integrity": "sha256:1f93c8315b7a6d76982ebb2269f8b0d50413fc0f965c032edf4aee0caceb73ef"
     },
-    "ghcr.io/devcontainers/features/node:1": {
-      "version": "1.7.1",
-      "resolved": "ghcr.io/devcontainers/features/node@sha256:8c0de46939b61958041700ee89e3493f3b2e4131a06dc46b4d9423427d06e5f6",
-      "integrity": "sha256:8c0de46939b61958041700ee89e3493f3b2e4131a06dc46b4d9423427d06e5f6"
-    },
-    "ghcr.io/jajera/features/agentcore-cli:1": {
-      "version": "1.0.0",
-      "resolved": "ghcr.io/jajera/features/agentcore-cli@sha256:b4c01e6f409b661d4e3ba9489611260e84b7b3d3cc1298442de6c9a017cb8d46",
-      "integrity": "sha256:b4c01e6f409b661d4e3ba9489611260e84b7b3d3cc1298442de6c9a017cb8d46",
-      "dependsOn": [
-        "ghcr.io/devcontainers/features/node:1"
-      ]
-    },
     "ghcr.io/nils-geistmann/devcontainers-features/zsh:0": {
       "version": "0.0.8",
       "resolved": "ghcr.io/nils-geistmann/devcontainers-features/zsh@sha256:fd57a61a5187480b5e73f8041be5b67005be48f06503736df6cfdd8d0f38f3c4",

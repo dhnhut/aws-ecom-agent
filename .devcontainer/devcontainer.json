@@ -1,71 +1,25 @@
-// Created from the "uv" template of Bare Dev Container Templates.
-// Usage, options, security defaults, and tips: https://github.com/bare-devcontainer/templates/tree/main/src/uv
-// What is installed in the image, and available tags: https://github.com/bare-devcontainer/images
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/python
 {
-  "name": "Python (uv)",
-  // Recommended: pin to a digest (e.g. "ghcr.io/bare-devcontainer/uv:trixie@sha256:<digest>").
-  // See https://github.com/bare-devcontainer/templates#pinning-images-to-a-digest
-  "image": "ghcr.io/bare-devcontainer/uv:trixie",
-  "remoteUser": "dev",
-  "runArgs": [
-    "--name",
-    "aws-ecom-agent",
-    "--cap-drop=ALL"
-  ],
-  // Remove "no-new-privileges" if users need to gain elevated privileges inside the container (e.g., su, sudo).
-  "securityOpt": [
-    "no-new-privileges"
-  ],
-  "init": true,
-  "containerEnv": {
-    // The cache volume and the workspace are different filesystems, so hardlinking would fail.
-    // See https://github.com/bare-devcontainer/templates/tree/main/src/uv#persistent-caches
-    "UV_LINK_MODE": "copy"
-  },
-  // "postCreateCommand": "npm install -g @aws/agentcore",
-  // If you use VS Code, uncomment the following to open $EDITOR/$VISUAL/$GIT_EDITOR (e.g. `git commit`) in a VS Code tab:
-  // "remoteEnv": {
-  //   "VISUAL": "code --wait",
-  //   "EDITOR": "code --wait",
-  //   "GIT_EDITOR": "code --wait"
-  // },
-  "mounts": [
-    // Persist uv's cache (downloaded Python interpreters and packages) across rebuilds.
-    {
-      "source": "${devcontainerId}-uv-cache",
-      "target": "/home/dev/.cache/uv",
-      "type": "volume"
-    }
-  ],
-  "customizations": {
-    "vscode": {
-      "extensions": [
-        "ms-python.python",
-        "charliermarsh.ruff"
-      ],
-      "settings": {
-        "[python]": {
-          "editor.defaultFormatter": "charliermarsh.ruff",
-          "editor.formatOnSave": true,
-          "editor.codeActionsOnSave": {
-            "source.fixAll": "explicit",
-            "source.organizeImports": "explicit"
-          }
-        }
-      }
-    }
-  },
-  "features": {
-    "ghcr.io/devcontainers/features/aws-cli:1": {},
-    "ghcr.io/stu-bell/devcontainer-features/node:0": {},
-    "ghcr.io/jajera/features/agentcore-cli:1": {},
-    "ghcr.io/nils-geistmann/devcontainers-features/zsh:0": {
-      "ohmyzsh": true,
-      "plugins": [
-        "git",
-        "zsh-autosuggestions",
-        "zsh-syntax-highlighting"
-      ]
-    }
-  }
+	"name": "Python 3",
+	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
+	"image": "mcr.microsoft.com/devcontainers/python:3-3.14-trixie",
+	"runArgs": [
+		"--name",
+		"aws-ecom-agent"
+	],
+	// Features to add to the dev container. More info: https://containers.dev/features.
+	"features": {
+		"ghcr.io/stu-bell/devcontainer-features/node:0": {},
+		"ghcr.io/devcontainers/features/aws-cli:1": {},
+		"ghcr.io/nils-geistmann/devcontainers-features/zsh:0": {}
+	},
+	// Use 'forwardPorts' to make a list of ports inside the container available locally.
+	// "forwardPorts": [],
+	// Use 'postCreateCommand' to run commands after the container is created.
+	"postCreateCommand": "npm install -g @aws/agentcore"
+	// Configure tool-specific properties.
+	// "customizations": {},
+	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
+	// "remoteUser": "root"
 }
