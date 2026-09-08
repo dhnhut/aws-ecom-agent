@@ -22,7 +22,7 @@
     // See https://github.com/bare-devcontainer/templates/tree/main/src/uv#persistent-caches
     "UV_LINK_MODE": "copy"
   },
-  "postCreateCommand": "npm install -g @aws/agentcore",
+  // "postCreateCommand": "npm install -g @aws/agentcore",
   // If you use VS Code, uncomment the following to open $EDITOR/$VISUAL/$GIT_EDITOR (e.g. `git commit`) in a VS Code tab:
   // "remoteEnv": {
   //   "VISUAL": "code --wait",
@@ -56,6 +56,16 @@
     }
   },
   "features": {
-    "ghcr.io/stu-bell/devcontainer-features/node:0": {}
+    "ghcr.io/devcontainers/features/aws-cli:1": {},
+    "ghcr.io/stu-bell/devcontainer-features/node:0": {},
+    "ghcr.io/jajera/features/agentcore-cli:1": {},
+    "ghcr.io/nils-geistmann/devcontainers-features/zsh:0": {
+      "ohmyzsh": true,
+      "plugins": [
+        "git",
+        "zsh-autosuggestions",
+        "zsh-syntax-highlighting"
+      ]
+    }
   }
 }
