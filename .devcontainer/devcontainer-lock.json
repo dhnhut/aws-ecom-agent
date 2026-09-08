@@ -1,0 +1,9 @@
+{
+  "features": {
+    "ghcr.io/stu-bell/devcontainer-features/node:0": {
+      "version": "0.5.2",
+      "resolved": "ghcr.io/stu-bell/devcontainer-features/node@sha256:044479bdbf55bf9191f6bea70306818c7669259f6962add77af2ff7d93658541",
+      "integrity": "sha256:044479bdbf55bf9191f6bea70306818c7669259f6962add77af2ff7d93658541"
+    }
+  }
+}
