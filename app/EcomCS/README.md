@@ -36,7 +36,8 @@ Command Prompt, or `.\.venv\Scripts\activate.ps1` in Windows PowerShell.
 
 In a new terminal, you can invoke that server with:
 
-`agentcore invoke --dev "What can you do"`
+<!-- `agentcore invoke --dev "What can you do"` -->
+`agentcore dev "What can you do"`
 
 # Deployment
 
