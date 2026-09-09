@@ -5,34 +5,61 @@ import asyncio
 from strands.agent.conversation_manager.null_conversation_manager import NullConversationManager
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from model.load import load_model
-from mcp_client.client import get_streamable_http_mcp_client
+# from mcp_client.client import get_streamable_http_mcp_client
+from mcp_client.client import get_business_mcp_client
 from memory.session import get_memory_session_manager
 
 app = BedrockAgentCoreApp()
 log = app.logger
 
-# Define a Streamable HTTP MCP Client
-mcp_clients = [get_streamable_http_mcp_client()]
-
 DEFAULT_SYSTEM_PROMPT = """
-You are a helpful assistant. Use tools when appropriate.
+## You are an intelligent customer support assistant for an e-commerce platform name Ecom.
 
+You handle complex, multi-step customer service workflows — order tracking, returns processing, product recommendations, and loyalty rewards calculations — all while maintaining conversation context across sessions
+
+## Use your tools whenever a question needs real customer or product data.
+
+Tools reach you through the AgentCore Gateway and cover:
+- Order tracking — look up a single order by its ID (e.g. ORD-001), or list every order belonging to a customer (e.g. CUST-123)
+- Customer profiles — name, loyalty points and membership tier for a customer ID
+- Refunds and returns — initiate a refund, check the status of one, or issue a return label
+- Knowledge base retrieval — product information and availability, the return and refund policy, the loyalty rewards program, and order status definitions
+
+Choose a tool by matching the request against the tool descriptions you were given. Never guess at a tool name, and never pass an argument that is not in a tool's input schema.
+
+ALWAYS retrieve from the knowledge base before answering questions about products, policies, loyalty rewards, or order status definitions. If the knowledge base does not cover the question, say so honestly.
+
+## You have PERSISTENT MEMORY: you remember each customer's preferences, past product, orders,
+and interests across multiple conversations.
+
+MEMORY-AWARE BEHAVIOUR
+- When a "Customer Context" block appears at the start of the user's message, it contains facts and preferences retrieved from past conversations.
+- Use this context to personalise your recommendations naturally.
+- Reference past context: "Based on your interest in Speakers..."
+- Never ask the Customer to repeat information they've already shared.
+
+Be warm, attentive, and genuinely helpful — like a trusted assistant who has known the customer for years.
 """
 
 
 # Define a collection of tools used by the model
 tools = []
 
-_INLINE_FUNCTION_NAMES = set()
+# _INLINE_FUNCTION_NAMES = set()
 
 # Define a simple function tool
-@tool
-def add_numbers(a: int, b: int) -> int:
-    """Return the sum of two numbers"""
-    return a+b
-tools.append(add_numbers)
 
 
+# @tool
+# def add_numbers(a: int, b: int) -> int:
+#     """Return the sum of two numbers"""
+#     return a+b
+
+
+# tools.append(add_numbers)
+
+# Define a Streamable HTTP MCP Client
+mcp_clients = [get_business_mcp_client()]
 
 # Add MCP client to tools if available
 for mcp_client in mcp_clients:
@@ -43,15 +70,18 @@ for mcp_client in mcp_clients:
 def _make_conversation_manager():
     return NullConversationManager()
 
+
 def agent_factory():
     cache = {}
+
     def get_or_create_agent(session_id, user_id):
         _actor_id = user_id
         key = f"{session_id}/{_actor_id}"
         if key not in cache:
             cache[key] = Agent(
                 model=load_model(),
-                session_manager=get_memory_session_manager(session_id, _actor_id),
+                session_manager=get_memory_session_manager(
+                    session_id, _actor_id),
                 conversation_manager=_make_conversation_manager(),
                 system_prompt=DEFAULT_SYSTEM_PROMPT,
                 tools=tools,
@@ -60,6 +90,8 @@ def agent_factory():
             )
         return cache[key]
     return get_or_create_agent
+
+
 get_or_create_agent = agent_factory()
 
 
@@ -75,7 +107,8 @@ def strip_trailing_tool_use(messages: Any) -> list[dict]:
             raise ValueError("each message must be an object")
         original_content = last.get("content", [])
         if not isinstance(original_content, list) or not all(isinstance(block, dict) for block in original_content):
-            raise ValueError("each message content value must be a list of content blocks")
+            raise ValueError(
+                "each message content value must be a list of content blocks")
 
         content = [block for block in original_content if "toolUse" not in block]
         if len(content) == len(original_content):
@@ -97,10 +130,12 @@ def _extract_prompt(payload: dict):
     if "tool_results" in payload:
         tool_results = payload["tool_results"]
         if not isinstance(tool_results, list) or not all(
-            isinstance(tool_result, dict) and isinstance(tool_result.get("toolUseId"), str)
+            isinstance(tool_result, dict) and isinstance(
+                tool_result.get("toolUseId"), str)
             for tool_result in tool_results
         ):
-            raise ValueError("tool_results must contain objects with a toolUseId string")
+            raise ValueError(
+                "tool_results must contain objects with a toolUseId string")
         return [{"role": "user", "content": [{"toolResult": {
             "toolUseId": tr["toolUseId"],
             "status": tr.get("status", "success"),
@@ -112,40 +147,52 @@ def _extract_prompt(payload: dict):
     return prompt
 
 
-def _has_inline_function_call(messages) -> bool:
-    """Return True if messages contains an assistant toolUse for an inline function tool."""
-    if not _INLINE_FUNCTION_NAMES or not isinstance(messages, list):
-        return False
-    for msg in messages:
-        if msg.get("role") == "assistant":
-            for block in msg.get("content", []):
-                if isinstance(block, dict) and block.get("toolUse", {}).get("name") in _INLINE_FUNCTION_NAMES:
-                    return True
-    return False
+def _payload_identity(payload: dict, key: str) -> str | None:
+    """Read a caller-supplied identity, which takes precedence over the runtime context."""
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{key} must be a non-empty string")
+    return value
 
 
-def _is_inline_function_call(event: dict) -> bool:
-    """Check if a contentBlockStart event is for an inline function tool."""
-    if not _INLINE_FUNCTION_NAMES:
-        return False
-    cbs = event.get("contentBlockStart", {})
-    start = cbs.get("start", {})
-    tool_use = start.get("toolUse") if isinstance(start, dict) else None
-    return tool_use is not None and tool_use.get("name") in _INLINE_FUNCTION_NAMES
+# def _has_inline_function_call(messages) -> bool:
+#     """Return True if messages contains an assistant toolUse for an inline function tool."""
+#     if not _INLINE_FUNCTION_NAMES or not isinstance(messages, list):
+#         return False
+#     for msg in messages:
+#         if msg.get("role") == "assistant":
+#             for block in msg.get("content", []):
+#                 if isinstance(block, dict) and block.get("toolUse", {}).get("name") in _INLINE_FUNCTION_NAMES:
+#                     return True
+#     return False
 
+
+# def _is_inline_function_call(event: dict) -> bool:
+#     """Check if a contentBlockStart event is for an inline function tool."""
+#     if not _INLINE_FUNCTION_NAMES:
+#         return False
+#     cbs = event.get("contentBlockStart", {})
+#     start = cbs.get("start", {})
+#     tool_use = start.get("toolUse") if isinstance(start, dict) else None
+#     return tool_use is not None and tool_use.get("name") in _INLINE_FUNCTION_NAMES
 
 
 @app.entrypoint
 async def invoke(payload, context):
     log.info("Invoking Agent.....")
 
-
-    session_id = getattr(context, 'session_id', 'default-session')
-    user_id = getattr(context, 'user_id', 'default-user')
-    agent = get_or_create_agent(session_id, user_id)
-
     prompt = _extract_prompt(payload)
 
+    # Prefer the identities the caller sent; fall back to the runtime context so
+    # AgentCore-supplied session/user headers still scope memory when absent.
+    session_id = (_payload_identity(payload, "session_id")
+                  or getattr(context, "session_id", None) or "default-session")
+    actor_id = (_payload_identity(payload, "customer_id")
+                or getattr(context, "user_id", None) or "default-user")
+
+    agent = get_or_create_agent(session_id, actor_id)
 
     async for event in agent.stream_async(
         prompt,
