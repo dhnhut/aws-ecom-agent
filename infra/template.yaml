@@ -1,0 +1,430 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >-
+  Customer support Lambdas and the CustomerSupportGateway REST API backing the
+  two AgentCore Gateway targets on EcomCS-gateway.
+
+  Deploy with scripts/deploy.sh, which runs `aws cloudformation package` to
+  upload the Lambda source in lambda/ before `aws cloudformation deploy`.
+  This stack is deliberately separate from agentcore/cdk/, which is generated
+  from agentcore.json and must not be hand-edited.
+
+Parameters:
+  StageName:
+    Type: String
+    Default: prod
+    Description: >-
+      REST API stage. Must match apiGateway.stage for the order_tracker target
+      in agentcore/agentcore.json.
+
+  LogRetentionInDays:
+    Type: Number
+    Default: 7
+    Description: CloudWatch Logs retention for both function log groups.
+
+Resources:
+  # ── Lambda execution roles ───────────────────────────────────────────────────
+  # One role per function so neither inherits the other's permissions. Both are
+  # log-only today; add scoped statements here if the handlers gain AWS calls.
+
+  OrderTrackerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  RefundProcessorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  # ── Log groups ───────────────────────────────────────────────────────────────
+  # Declared explicitly so retention is managed by the stack and the groups are
+  # deleted with it. Lambda auto-creates /aws/lambda/<name> on first invoke and
+  # that group would be unmanaged and never expire, so each function DependsOn
+  # its group to guarantee this one wins the race.
+
+  OrderTrackerLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: /aws/lambda/order-tracker
+      RetentionInDays: !Ref LogRetentionInDays
+
+  RefundProcessorLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: /aws/lambda/refund-processor
+      RetentionInDays: !Ref LogRetentionInDays
+
+  # ── Lambda functions ─────────────────────────────────────────────────────────
+  # Both handlers are stdlib-only, so Code points straight at the source
+  # directory and `aws cloudformation package` zips and uploads it. Each
+  # function has its own directory so neither ships the other's code.
+
+  OrderTrackerFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: OrderTrackerLogGroup
+    Properties:
+      FunctionName: order-tracker
+      Runtime: python3.13
+      Handler: order_tracker.lambda_handler
+      Code: ../lambda/order_tracker
+      Role: !GetAtt OrderTrackerRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      LoggingConfig:
+        LogGroup: !Ref OrderTrackerLogGroup
+
+  # FunctionName is pinned so agentcore.json can reference the ARN statically as
+  # arn:aws:lambda:<region>:<account>:function:refund-processor with no
+  # post-deploy lookup. The gateway invokes this one directly, not via the API.
+  RefundProcessorFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: RefundProcessorLogGroup
+    Properties:
+      FunctionName: refund-processor
+      Runtime: python3.13
+      Handler: refund_processor.lambda_handler
+      Code: ../lambda/refund_processor
+      Role: !GetAtt RefundProcessorRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      LoggingConfig:
+        LogGroup: !Ref RefundProcessorLogGroup
+
+  # ── REST API ─────────────────────────────────────────────────────────────────
+  # AgentCore Gateway requires a REST API (not HTTP/WebSocket) on a public
+  # endpoint in the same account and region as the gateway.
+
+  RestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: CustomerSupportGateway
+      Description: Order and customer lookup, exposed to AgentCore Gateway as MCP tools
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  # ── Resources: /orders/{order_id} ────────────────────────────────────────────
+
+  OrdersResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RestApi
+      ParentId: !GetAtt RestApi.RootResourceId
+      PathPart: orders
+
+  OrderByIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RestApi
+      ParentId: !Ref OrdersResource
+      PathPart: '{order_id}'
+
+  # ── Resources: /customers/{customer_id}[/orders] ─────────────────────────────
+
+  CustomersResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RestApi
+      ParentId: !GetAtt RestApi.RootResourceId
+      PathPart: customers
+
+  CustomerByIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RestApi
+      ParentId: !Ref CustomersResource
+      PathPart: '{customer_id}'
+
+  CustomerOrdersResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RestApi
+      ParentId: !Ref CustomerByIdResource
+      PathPart: orders
+
+  # ── Response models ──────────────────────────────────────────────────────────
+  # AgentCore refuses to import an operation whose OpenAPI export has no
+  # `responses` ("Failed to parse OpenAPI specification: attribute
+  # paths.'...'(get).responses is missing"). A proxy integration declares no
+  # responses on its own, so each method must carry an explicit MethodResponses
+  # block. The attached models also become the tool's output schema in MCP,
+  # which is what tells the agent what shape it gets back.
+  #
+  # API Gateway models are JSON Schema draft-04.
+
+  OrderModel:
+    Type: AWS::ApiGateway::Model
+    Properties:
+      RestApiId: !Ref RestApi
+      ContentType: application/json
+      Name: Order
+      Schema:
+        $schema: http://json-schema.org/draft-04/schema#
+        title: Order
+        type: object
+        properties:
+          order_id: { type: string }
+          customer_id: { type: string }
+          status: { type: string }
+          total: { type: number }
+          tracking_number: { type: string }
+          carrier: { type: string }
+          estimated_delivery: { type: string }
+          delivered_date: { type: string }
+          items:
+            type: array
+            items:
+              type: object
+              properties:
+                name: { type: string }
+                qty: { type: integer }
+                price: { type: number }
+
+  CustomerModel:
+    Type: AWS::ApiGateway::Model
+    Properties:
+      RestApiId: !Ref RestApi
+      ContentType: application/json
+      Name: Customer
+      Schema:
+        $schema: http://json-schema.org/draft-04/schema#
+        title: Customer
+        type: object
+        properties:
+          name: { type: string }
+          loyalty_points: { type: integer }
+          tier: { type: string }
+
+  # The order shape is inlined rather than $ref'd: cross-model references in
+  # API Gateway need a full https://apigateway.amazonaws.com/restapis/<id>/models/<name>
+  # URI, which cannot be built before the API exists.
+  CustomerOrdersModel:
+    Type: AWS::ApiGateway::Model
+    Properties:
+      RestApiId: !Ref RestApi
+      ContentType: application/json
+      Name: CustomerOrders
+      Schema:
+        $schema: http://json-schema.org/draft-04/schema#
+        title: CustomerOrders
+        type: object
+        properties:
+          customer_id: { type: string }
+          orders:
+            type: array
+            items:
+              type: object
+              properties:
+                order_id: { type: string }
+                customer_id: { type: string }
+                status: { type: string }
+                total: { type: number }
+                tracking_number: { type: string }
+                carrier: { type: string }
+                estimated_delivery: { type: string }
+                delivered_date: { type: string }
+                items:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name: { type: string }
+                      qty: { type: integer }
+                      price: { type: number }
+
+  ErrorModel:
+    Type: AWS::ApiGateway::Model
+    Properties:
+      RestApiId: !Ref RestApi
+      ContentType: application/json
+      Name: ErrorResponse
+      Schema:
+        $schema: http://json-schema.org/draft-04/schema#
+        title: ErrorResponse
+        type: object
+        properties:
+          error: { type: string }
+
+  # ── Methods ──────────────────────────────────────────────────────────────────
+  # AuthorizationType AWS_IAM is what lets the gateway reach the API: the
+  # AgentCore CDK grants its gateway role execute-api:Invoke on
+  # <restApiId>/<stage>/* and signs requests with SigV4. No API Gateway resource
+  # policy is needed, and AgentCore drops any IAM method that also requires an
+  # API Gateway API key.
+  #
+  # OperationName becomes operationId in the OpenAPI document AgentCore fetches
+  # via GetExport, and that is what names the MCP tool. Without it, target
+  # creation fails validation.
+  #
+  # Integration is AWS_PROXY, so order_tracker.py receives `resource`,
+  # `httpMethod` and `pathParameters` and routes on them. IntegrationHttpMethod
+  # is always POST for Lambda regardless of the method's own HTTP verb.
+
+  GetOrderByIdMethod:
+    Type: AWS::ApiGateway::Method
+    DependsOn:
+      - OrderModel
+      - ErrorModel
+    Properties:
+      RestApiId: !Ref RestApi
+      ResourceId: !Ref OrderByIdResource
+      HttpMethod: GET
+      AuthorizationType: AWS_IAM
+      OperationName: getOrderById
+      RequestParameters:
+        method.request.path.order_id: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OrderTrackerFunction.Arn}/invocations
+      MethodResponses:
+        - StatusCode: '200'
+          ResponseModels:
+            application/json: Order
+        - StatusCode: '404'
+          ResponseModels:
+            application/json: ErrorResponse
+        - StatusCode: '400'
+          ResponseModels:
+            application/json: ErrorResponse
+
+  GetCustomerMethod:
+    Type: AWS::ApiGateway::Method
+    DependsOn:
+      - CustomerModel
+      - ErrorModel
+    Properties:
+      RestApiId: !Ref RestApi
+      ResourceId: !Ref CustomerByIdResource
+      HttpMethod: GET
+      AuthorizationType: AWS_IAM
+      OperationName: getCustomer
+      RequestParameters:
+        method.request.path.customer_id: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OrderTrackerFunction.Arn}/invocations
+      MethodResponses:
+        - StatusCode: '200'
+          ResponseModels:
+            application/json: Customer
+        - StatusCode: '404'
+          ResponseModels:
+            application/json: ErrorResponse
+        - StatusCode: '400'
+          ResponseModels:
+            application/json: ErrorResponse
+
+  ListCustomerOrdersMethod:
+    Type: AWS::ApiGateway::Method
+    DependsOn:
+      - CustomerOrdersModel
+      - ErrorModel
+    Properties:
+      RestApiId: !Ref RestApi
+      ResourceId: !Ref CustomerOrdersResource
+      HttpMethod: GET
+      AuthorizationType: AWS_IAM
+      OperationName: listCustomerOrders
+      RequestParameters:
+        method.request.path.customer_id: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OrderTrackerFunction.Arn}/invocations
+      MethodResponses:
+        - StatusCode: '200'
+          ResponseModels:
+            application/json: CustomerOrders
+        - StatusCode: '404'
+          ResponseModels:
+            application/json: ErrorResponse
+        - StatusCode: '400'
+          ResponseModels:
+            application/json: ErrorResponse
+
+  # One wildcard permission covers every stage and method, including the
+  # console's test-invoke stage. The CDK equivalent emits six of these.
+  OrderTrackerApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt OrderTrackerFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApi}/*/GET/*
+
+  # ── Deployment and stage ─────────────────────────────────────────────────────
+  # An AWS::ApiGateway::Deployment is an immutable snapshot. CloudFormation only
+  # creates a new one when this resource's own properties change, so editing a
+  # method above does NOT by itself redeploy the stage — the well-known raw-CFN
+  # gotcha that the CDK papers over by hashing the API into the logical ID.
+  #
+  # Two mitigations, both in play:
+  #   1. Bump the logical ID (ApiDeploymentV2 -> ApiDeploymentV2, updating the
+  #      Stage ref) whenever you change routes, methods or integrations.
+  #   2. scripts/deploy.sh calls `aws apigateway create-deployment` after every
+  #      stack update, so the stage always serves current config even if you
+  #      forget step 1.
+  ApiDeploymentV2:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - GetOrderByIdMethod
+      - GetCustomerMethod
+      - ListCustomerOrdersMethod
+    Properties:
+      RestApiId: !Ref RestApi
+      Description: Three order-tracker routes with declared method responses
+
+  ApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref RestApi
+      DeploymentId: !Ref ApiDeploymentV2
+      StageName: !Ref StageName
+      MethodSettings:
+        - ResourcePath: /*
+          HttpMethod: '*'
+          MetricsEnabled: true
+          ThrottlingRateLimit: 50
+          ThrottlingBurstLimit: 100
+
+Outputs:
+  # RestApiId and StageName are read by scripts/sync-gateway-target.mjs and
+  # written into agentcore/agentcore.json before `agentcore deploy`.
+  RestApiId:
+    Description: REST API id for the order_tracker gateway target
+    Value: !Ref RestApi
+
+  StageName:
+    Description: Deployed stage name for the order_tracker gateway target
+    Value: !Ref ApiStage
+
+  OrderTrackerArn:
+    Description: ARN of the order-tracker function
+    Value: !GetAtt OrderTrackerFunction.Arn
+
+  RefundProcessorArn:
+    Description: ARN of the refund-processor function, referenced by agentcore.json
+    Value: !GetAtt RefundProcessorFunction.Arn
