@@ -22,6 +22,20 @@ Parameters:
     Default: 7
     Description: CloudWatch Logs retention for both function log groups.
 
+  KnowledgeBaseName:
+    Type: String
+    Default: CustomerSupportKB
+    Description: >-
+      Bedrock knowledge base name. Renaming replaces the knowledge base, which
+      changes its id and invalidates the connector target in agentcore.json.
+
+  EmbeddingModelId:
+    Type: String
+    Default: amazon.titan-embed-text-v2:0
+    Description: >-
+      Bedrock embeddings model for the knowledge base. Default is Amazon Titan
+      Text Embeddings v2.
+
 Resources:
   # ── Lambda execution roles ───────────────────────────────────────────────────
   # One role per function so neither inherits the other's permissions. Both are
@@ -410,6 +424,137 @@ Resources:
           ThrottlingRateLimit: 50
           ThrottlingBurstLimit: 100
 
+  # ── Knowledge base source bucket ─────────────────────────────────────────────
+  # Holds the product catalog that CustomerSupportKB ingests. The name is
+  # deterministic (ecomcs-kb-<account>-<region>) so scripts/deploy.sh can build
+  # the s3:// URI for the upload without reading a stack output first.
+  #
+  # CloudFormation cannot delete a bucket that still has objects, so a stack
+  # teardown needs `aws s3 rm s3://<bucket> --recursive` first.
+  KnowledgeBaseBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub ecomcs-kb-${AWS::AccountId}-${AWS::Region}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # ── Knowledge base service role ──────────────────────────────────────────────
+  # Bedrock assumes this to read the source bucket and to call the embeddings
+  # model. The role name carries the AmazonBedrockExecutionRoleForKnowledgeBase_
+  # prefix that the Bedrock console expects, which is why scripts/deploy.sh
+  # deploys with CAPABILITY_NAMED_IAM rather than CAPABILITY_IAM.
+  #
+  # The trust policy is confused-deputy scoped: Bedrock may only assume it on
+  # behalf of a knowledge base in this account and region.
+  KnowledgeBaseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub AmazonBedrockExecutionRoleForKnowledgeBase_ecomcs-${AWS::Region}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/*
+      Policies:
+        - PolicyName: InvokeEmbeddingsModel
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${EmbeddingModelId}
+        - PolicyName: ReadSourceBucket
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt KnowledgeBaseBucket.Arn
+                Condition:
+                  StringEquals:
+                    aws:ResourceAccount: !Ref AWS::AccountId
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub ${KnowledgeBaseBucket.Arn}/*
+                Condition:
+                  StringEquals:
+                    aws:ResourceAccount: !Ref AWS::AccountId
+
+  # ── Knowledge base ───────────────────────────────────────────────────────────
+  # Type MANAGED: Bedrock owns the vector store, so the stack declares no
+  # OpenSearch Serverless collection and no S3 Vectors index. That is not just
+  # convenience here — a self-managed VECTOR knowledge base must name a store
+  # ("You must provide a storage configuration if you create a VECTOR knowledge
+  # base"), and every backend it could name (s3vectors, aoss, es, rds,
+  # neptune-graph) is denied to this account's deploy identity.
+  #
+  # EmbeddingModelType CUSTOM with an explicit ARN pins embeddings to Titan Text
+  # Embeddings v2 rather than taking the service default.
+  KnowledgeBase:
+    Type: AWS::Bedrock::KnowledgeBase
+    Properties:
+      Name: !Ref KnowledgeBaseName
+      Description: Product catalog, warranty, return and shipping reference for the EcomCS support agent
+      RoleArn: !GetAtt KnowledgeBaseRole.Arn
+      KnowledgeBaseConfiguration:
+        Type: MANAGED
+        ManagedKnowledgeBaseConfiguration:
+          EmbeddingModelType: CUSTOM
+          EmbeddingModelArn: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${EmbeddingModelId}
+
+  # A MANAGED knowledge base only accepts MANAGED_KNOWLEDGE_BASE_CONNECTOR data
+  # sources — a plain `Type: S3` DataSource is rejected with "Unsupported data
+  # source type for MANAGED knowledge base type". S3 is reached through the
+  # connector instead.
+  #
+  # ConnectorParameters is an opaque pass-through: its keys are camelCase, not
+  # the PascalCase CloudFormation uses everywhere else, and `version` must be
+  # the *string* "1" — an unquoted 1 marshals to 1.0 and the service rejects it
+  # with "Invalid connector version '1.0'".
+  #
+  # Creating the data source ingests nothing; it only records where to read.
+  # scripts/deploy.sh uploads data/product_catalog.txt and then calls
+  # `aws bedrock-agent start-ingestion-job` to sync it.
+  #
+  # DataDeletionPolicy RETAIN keeps a stack teardown from failing on the vector
+  # cleanup that DELETE would trigger.
+  KnowledgeBaseDataSource:
+    Type: AWS::Bedrock::DataSource
+    Properties:
+      KnowledgeBaseId: !Ref KnowledgeBase
+      Name: product-catalog
+      Description: data/product_catalog.txt, uploaded to the knowledge base bucket by scripts/deploy.sh
+      DataDeletionPolicy: RETAIN
+      DataSourceConfiguration:
+        Type: MANAGED_KNOWLEDGE_BASE_CONNECTOR
+        ManagedKnowledgeBaseConnectorConfiguration:
+          ConnectorParameters:
+            type: S3
+            version: '1'
+            connectionConfiguration:
+              bucketArn: !GetAtt KnowledgeBaseBucket.Arn
+              bucketName: !Ref KnowledgeBaseBucket
+              bucketOwnerAccountId: !Ref AWS::AccountId
+            filterConfiguration:
+              inclusionPrefixes:
+                - product_catalog.txt
+
 Outputs:
   # RestApiId and StageName are read by scripts/sync-gateway-target.mjs and
   # written into agentcore/agentcore.json before `agentcore deploy`.
@@ -428,3 +573,21 @@ Outputs:
   RefundProcessorArn:
     Description: ARN of the refund-processor function, referenced by agentcore.json
     Value: !GetAtt RefundProcessorFunction.Arn
+
+  # KnowledgeBaseId is read by scripts/sync-gateway-target.mjs and written into
+  # the bedrock-knowledge-bases connector target in agentcore/agentcore.json.
+  KnowledgeBaseId:
+    Description: Bedrock knowledge base id for the CustomerSupportKB connector target
+    Value: !Ref KnowledgeBase
+
+  KnowledgeBaseArn:
+    Description: ARN of the CustomerSupportKB knowledge base
+    Value: !GetAtt KnowledgeBase.KnowledgeBaseArn
+
+  KnowledgeBaseDataSourceId:
+    Description: Data source id, passed to `aws bedrock-agent start-ingestion-job`
+    Value: !GetAtt KnowledgeBaseDataSource.DataSourceId
+
+  KnowledgeBaseBucketName:
+    Description: Bucket holding product_catalog.txt, the knowledge base data source
+    Value: !Ref KnowledgeBaseBucket

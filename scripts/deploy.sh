@@ -8,7 +8,9 @@
 # therefore exist before `agentcore deploy` runs.
 #
 # Teardown is the reverse: `agentcore remove` + `agentcore deploy` to drop the
-# gateway targets, then `aws cloudformation delete-stack --stack-name <STACK>`.
+# gateway targets, then `aws s3 rm s3://<kb-bucket> --recursive` (CloudFormation
+# cannot delete a bucket that still holds objects), then
+# `aws cloudformation delete-stack --stack-name <STACK>`.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -54,9 +56,53 @@ echo "==> Deploying $STACK_NAME (Lambdas + CustomerSupportGateway REST API)"
 aws cloudformation deploy \
   --template-file "$PACKAGED" \
   --stack-name "$STACK_NAME" \
-  --capabilities CAPABILITY_IAM \
+  --capabilities CAPABILITY_NAMED_IAM \
   --tags "agentcore:project-name=Ecom" \
   --no-fail-on-empty-changeset
+
+# ── Knowledge base data source ───────────────────────────────────────────────
+# CloudFormation creates the bucket and registers the data source, but it can
+# neither put objects nor ingest them, so both steps live here. `s3 cp` is
+# idempotent and start-ingestion-job re-reads the whole prefix, so re-running
+# deploy.sh simply re-syncs the catalog.
+KB_BUCKET="$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+  --query "Stacks[0].Outputs[?OutputKey=='KnowledgeBaseBucketName'].OutputValue" --output text)"
+KB_ID="$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+  --query "Stacks[0].Outputs[?OutputKey=='KnowledgeBaseId'].OutputValue" --output text)"
+KB_DATA_SOURCE_ID="$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+  --query "Stacks[0].Outputs[?OutputKey=='KnowledgeBaseDataSourceId'].OutputValue" --output text)"
+
+echo "==> Uploading data/product_catalog.txt to s3://$KB_BUCKET"
+aws s3 cp data/product_catalog.txt "s3://$KB_BUCKET/product_catalog.txt"
+
+echo "==> Syncing knowledge base $KB_ID (data source $KB_DATA_SOURCE_ID)"
+INGESTION_JOB_ID="$(aws bedrock-agent start-ingestion-job \
+  --knowledge-base-id "$KB_ID" \
+  --data-source-id "$KB_DATA_SOURCE_ID" \
+  --description "scripts/deploy.sh $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --query 'ingestionJob.ingestionJobId' --output text)"
+
+# Poll rather than fire-and-forget: a failed ingestion leaves the knowledge base
+# queryable but empty, which is far harder to spot later than a failed deploy.
+while :; do
+  INGESTION_STATUS="$(aws bedrock-agent get-ingestion-job \
+    --knowledge-base-id "$KB_ID" \
+    --data-source-id "$KB_DATA_SOURCE_ID" \
+    --ingestion-job-id "$INGESTION_JOB_ID" \
+    --query 'ingestionJob.status' --output text)"
+  case "$INGESTION_STATUS" in
+    COMPLETE) echo "    ingestion complete"; break ;;
+    FAILED|STOPPED)
+      echo "    ingestion $INGESTION_STATUS" >&2
+      aws bedrock-agent get-ingestion-job \
+        --knowledge-base-id "$KB_ID" \
+        --data-source-id "$KB_DATA_SOURCE_ID" \
+        --ingestion-job-id "$INGESTION_JOB_ID" \
+        --query 'ingestionJob.failureReasons' --output json >&2
+      exit 1 ;;
+    *) echo "    ingestion $INGESTION_STATUS ..."; sleep 10 ;;
+  esac
+done
 
 # ── Force a fresh stage deployment ───────────────────────────────────────────
 # AWS::ApiGateway::Deployment is immutable, so CloudFormation will not redeploy
@@ -75,11 +121,13 @@ aws apigateway create-deployment \
   --description "scripts/deploy.sh $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --no-cli-pager >/dev/null
 
-# ── Hand the generated REST API id to AgentCore ──────────────────────────────
+# ── Hand the generated ids to AgentCore ──────────────────────────────────────
+# The REST API id and the knowledge base id are both created by the stack, so
+# agentcore.json cannot carry them statically.
 aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
   --query "Stacks[0].Outputs" --output json > "$OUTPUTS"
 
-echo "==> Syncing restApiId into agentcore.json"
+echo "==> Syncing restApiId and knowledgeBaseId into agentcore.json"
 node scripts/sync-gateway-target.mjs
 
 echo "==> Validating and deploying the AgentCore project"

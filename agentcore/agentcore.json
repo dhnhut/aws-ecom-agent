@@ -92,21 +92,21 @@
               ],
               "toolOverrides": [
                 {
+                  "name": "getOrderById",
                   "path": "/orders/{order_id}",
                   "method": "GET",
-                  "name": "getOrderById",
                   "description": "Look up a single order by its order ID, including status, items, total, carrier and tracking number."
                 },
                 {
+                  "name": "getCustomer",
                   "path": "/customers/{customer_id}",
                   "method": "GET",
-                  "name": "getCustomer",
                   "description": "Get a customer profile: name, loyalty points and membership tier."
                 },
                 {
+                  "name": "listCustomerOrders",
                   "path": "/customers/{customer_id}/orders",
                   "method": "GET",
-                  "name": "listCustomerOrders",
                   "description": "List every order belonging to a customer."
                 }
               ]
@@ -120,6 +120,41 @@
             "lambdaArn": "arn:aws:lambda:us-east-1:566068566473:function:refund-processor",
             "toolSchemaFile": "lambda/refund_processor/lambda_schema.json"
           }
+        },
+        {
+          "name": "customer-support-kb",
+          "targetType": "connector",
+          "connectorId": "bedrock-knowledge-bases",
+          "configurations": [
+            {
+              "name": "AgenticRetrieveStream",
+              "description": "Streaming endpoint for agentic retrieval from knowledge bases. Performs multi-step retrieval with planning and returns results as a stream of events.",
+              "parameterValues": {
+                "retrievers": [
+                  {
+                    "configuration": {
+                      "knowledgeBase": {
+                        "knowledgeBaseId": "HW6HQV2YWS"
+                      }
+                    }
+                  }
+                ],
+                "agenticRetrieveConfiguration": {
+                  "foundationModelType": "MANAGED",
+                  "rerankingModelType": "MANAGED"
+                }
+              },
+              "parameterOverrides": []
+            },
+            {
+              "name": "Retrieve",
+              "description": "Queries a knowledge base and retrieves information from it.",
+              "parameterValues": {
+                "knowledgeBaseId": "HW6HQV2YWS"
+              },
+              "parameterOverrides": []
+            }
+          ]
         }
       ],
       "authorizerType": "NONE",
