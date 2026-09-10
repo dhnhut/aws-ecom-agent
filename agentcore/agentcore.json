@@ -57,7 +57,36 @@
   "credentials": [],
   "evaluators": [],
   "onlineEvalConfigs": [],
-  "agentCoreGateways": [],
+  "agentCoreGateways": [
+    {
+      "name": "CustomerSupportGateway",
+      "protocolType": "MCP",
+      "description": "MCP gateway exposing customer support tools to the EcomCS agent",
+      "targets": [
+        {
+          "name": "order-tracker",
+          "targetType": "apiGateway",
+          "apiGateway": {
+            "restApiId": "z5dy835m83",
+            "stage": "prod",
+            "apiGatewayToolConfiguration": {
+              "toolFilters": [
+                {
+                  "filterPath": "/*",
+                  "methods": [
+                    "GET"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "authorizerType": "NONE",
+      "enableSemanticSearch": true,
+      "exceptionLevel": "NONE"
+    }
+  ],
   "policyEngines": [],
   "configBundles": [],
   "abTests": [],

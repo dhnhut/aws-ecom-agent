@@ -145,6 +145,12 @@ Resources:
   # AWS_PROXY integrations always use POST as the integration method regardless
   # of the route's own method; the handler reads `resource` and `httpMethod`
   # off the proxy event to route.
+  #
+  # MethodResponses do not change what the proxy integration returns at runtime,
+  # but they are what gives each operation a `responses` block in the OpenAPI
+  # export. An AgentCore apiGateway gateway target builds its tool schema from
+  # that export and refuses to create without it, failing with
+  # "attribute paths.'/orders/{order_id}'(get).responses is missing".
   GetOrderMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -155,6 +161,13 @@ Resources:
       OperationName: get_order
       RequestParameters:
         method.request.path.order_id: true
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseModels:
+            application/json: Empty
+        - StatusCode: "404"
+          ResponseModels:
+            application/json: Error
       Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
@@ -170,6 +183,13 @@ Resources:
       OperationName: get_customer_orders
       RequestParameters:
         method.request.path.customer_id: true
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseModels:
+            application/json: Empty
+        - StatusCode: "404"
+          ResponseModels:
+            application/json: Error
       Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
@@ -185,6 +205,13 @@ Resources:
       OperationName: get_customer
       RequestParameters:
         method.request.path.customer_id: true
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseModels:
+            application/json: Empty
+        - StatusCode: "404"
+          ResponseModels:
+            application/json: Error
       Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
@@ -194,9 +221,9 @@ Resources:
   # A Deployment is an immutable snapshot of the routes at create time. Editing
   # the methods above does NOT refresh it — CloudFormation sees no property
   # change and leaves the old snapshot in place. Whenever you add or change a
-  # route, bump this logical ID (ApiDeploymentV1 -> ApiDeploymentV2) so a fresh
+  # route, bump this logical ID (ApiDeploymentV2 -> ApiDeploymentV3) so a fresh
   # snapshot is created and the stage repoints at it.
-  ApiDeploymentV1:
+  ApiDeploymentV2:
     Type: AWS::ApiGateway::Deployment
     DependsOn:
       - GetOrderMethod
@@ -210,7 +237,7 @@ Resources:
     Type: AWS::ApiGateway::Stage
     Properties:
       RestApiId: !Ref RestApi
-      DeploymentId: !Ref ApiDeploymentV1
+      DeploymentId: !Ref ApiDeploymentV2
       StageName: !Ref StageName
       Description: !Sub "${StageName} stage"
       # Access logging is intentionally omitted: LoggingLevel on MethodSettings

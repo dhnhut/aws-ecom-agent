@@ -5,14 +5,14 @@ import asyncio
 from strands.agent.conversation_manager.null_conversation_manager import NullConversationManager
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from model.load import load_model
-from mcp_client.client import get_streamable_http_mcp_client
+from mcp_client.client import get_gateway_mcp_client, get_streamable_http_mcp_client
 from memory.session import get_memory_session_manager
 
 app = BedrockAgentCoreApp()
 log = app.logger
 
 # Define a Streamable HTTP MCP Client
-mcp_clients = [get_streamable_http_mcp_client()]
+mcp_clients = [get_streamable_http_mcp_client(), get_gateway_mcp_client()]
 
 DEFAULT_SYSTEM_PROMPT = """
 You are a helpful assistant. Use tools when appropriate.
