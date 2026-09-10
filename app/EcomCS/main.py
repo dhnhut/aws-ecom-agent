@@ -15,8 +15,22 @@ log = app.logger
 mcp_clients = [get_streamable_http_mcp_client(), get_gateway_mcp_client()]
 
 DEFAULT_SYSTEM_PROMPT = """
-You are a helpful assistant. Use tools when appropriate.
+You are a customer support agent for the Ecom store. Use tools when appropriate.
 
+Product, policy and troubleshooting questions are answered from the
+CustomerSupportKB knowledge base, reachable as the `customer-support-kb___Retrieve`
+and `customer-support-kb___AgenticRetrieveStream` tools on the support gateway.
+Retrieve before you answer any question about product specs, pricing, warranty
+terms, the return or refund policy, shipping, or how to fix a device — never
+answer those from your own knowledge. Prefer `Retrieve` for a single lookup and
+`AgenticRetrieveStream` for questions that span several documents.
+
+Ground your answer in the retrieved passages and cite the product or policy name
+you drew it from. If retrieval comes back with nothing relevant, say the
+knowledge base does not cover it rather than guessing.
+
+Order lookups, refunds and return labels go to their own tools, not the
+knowledge base.
 """
 
 
@@ -26,12 +40,15 @@ tools = []
 _INLINE_FUNCTION_NAMES = set()
 
 # Define a simple function tool
+
+
 @tool
 def add_numbers(a: int, b: int) -> int:
     """Return the sum of two numbers"""
     return a+b
-tools.append(add_numbers)
 
+
+tools.append(add_numbers)
 
 
 # Add MCP client to tools if available
@@ -43,15 +60,18 @@ for mcp_client in mcp_clients:
 def _make_conversation_manager():
     return NullConversationManager()
 
+
 def agent_factory():
     cache = {}
+
     def get_or_create_agent(session_id, user_id):
         _actor_id = user_id
         key = f"{session_id}/{_actor_id}"
         if key not in cache:
             cache[key] = Agent(
                 model=load_model(),
-                session_manager=get_memory_session_manager(session_id, _actor_id),
+                session_manager=get_memory_session_manager(
+                    session_id, _actor_id),
                 conversation_manager=_make_conversation_manager(),
                 system_prompt=DEFAULT_SYSTEM_PROMPT,
                 tools=tools,
@@ -60,6 +80,8 @@ def agent_factory():
             )
         return cache[key]
     return get_or_create_agent
+
+
 get_or_create_agent = agent_factory()
 
 
@@ -75,7 +97,8 @@ def strip_trailing_tool_use(messages: Any) -> list[dict]:
             raise ValueError("each message must be an object")
         original_content = last.get("content", [])
         if not isinstance(original_content, list) or not all(isinstance(block, dict) for block in original_content):
-            raise ValueError("each message content value must be a list of content blocks")
+            raise ValueError(
+                "each message content value must be a list of content blocks")
 
         content = [block for block in original_content if "toolUse" not in block]
         if len(content) == len(original_content):
@@ -97,10 +120,12 @@ def _extract_prompt(payload: dict):
     if "tool_results" in payload:
         tool_results = payload["tool_results"]
         if not isinstance(tool_results, list) or not all(
-            isinstance(tool_result, dict) and isinstance(tool_result.get("toolUseId"), str)
+            isinstance(tool_result, dict) and isinstance(
+                tool_result.get("toolUseId"), str)
             for tool_result in tool_results
         ):
-            raise ValueError("tool_results must contain objects with a toolUseId string")
+            raise ValueError(
+                "tool_results must contain objects with a toolUseId string")
         return [{"role": "user", "content": [{"toolResult": {
             "toolUseId": tr["toolUseId"],
             "status": tr.get("status", "success"),
@@ -134,18 +159,15 @@ def _is_inline_function_call(event: dict) -> bool:
     return tool_use is not None and tool_use.get("name") in _INLINE_FUNCTION_NAMES
 
 
-
 @app.entrypoint
 async def invoke(payload, context):
     log.info("Invoking Agent.....")
-
 
     session_id = getattr(context, 'session_id', 'default-session')
     user_id = getattr(context, 'user_id', 'default-user')
     agent = get_or_create_agent(session_id, user_id)
 
     prompt = _extract_prompt(payload)
-
 
     async for event in agent.stream_async(
         prompt,

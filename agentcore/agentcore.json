@@ -53,7 +53,19 @@
       ]
     }
   ],
-  "knowledgeBases": [],
+  "knowledgeBases": [
+    {
+      "type": "AgentCoreKnowledgeBase",
+      "name": "CustomerSupportKB",
+      "description": "Product catalog and customer-support reference for the Ecom store: product specs and pricing, warranty terms, return and refund policy, shipping options and troubleshooting steps.",
+      "dataSources": [
+        {
+          "type": "S3",
+          "uri": "s3://ecom-agent-extended-knowledge-base-566068566473-us-east-1"
+        }
+      ]
+    }
+  ],
   "credentials": [],
   "evaluators": [],
   "onlineEvalConfigs": [],
@@ -84,20 +96,6 @@
         {
           "name": "refund-processor",
           "targetType": "lambda",
-          "compute": {
-            "host": "Lambda",
-            "implementation": {
-              "language": "Python",
-              "path": "lambda/refund_processor/",
-              "handler": "refund_processor.lambda_handler"
-            },
-            "pythonVersion": "PYTHON_3_13",
-            "timeout": 30,
-            "memorySize": 512
-          },
-          "outboundAuth": {
-            "type": "NONE"
-          },
           "toolDefinitions": [
             {
               "name": "initiate_refund",
@@ -155,6 +153,55 @@
                   "order_id"
                 ]
               }
+            }
+          ],
+          "compute": {
+            "host": "Lambda",
+            "implementation": {
+              "language": "Python",
+              "path": "lambda/refund_processor/",
+              "handler": "refund_processor.lambda_handler"
+            },
+            "pythonVersion": "PYTHON_3_13",
+            "timeout": 30,
+            "memorySize": 512
+          },
+          "outboundAuth": {
+            "type": "NONE"
+          }
+        },
+        {
+          "name": "customer-support-kb",
+          "targetType": "connector",
+          "connectorId": "bedrock-knowledge-bases",
+          "configurations": [
+            {
+              "name": "AgenticRetrieveStream",
+              "description": "Streaming endpoint for agentic retrieval from knowledge bases. Performs multi-step retrieval with planning and returns results as a stream of events.",
+              "parameterValues": {
+                "retrievers": [
+                  {
+                    "configuration": {
+                      "knowledgeBase": {
+                        "knowledgeBaseId": "CustomerSupportKB"
+                      }
+                    }
+                  }
+                ],
+                "agenticRetrieveConfiguration": {
+                  "foundationModelType": "MANAGED",
+                  "rerankingModelType": "MANAGED"
+                }
+              },
+              "parameterOverrides": []
+            },
+            {
+              "name": "Retrieve",
+              "description": "Queries a knowledge base and retrieves information from it.",
+              "parameterValues": {
+                "knowledgeBaseId": "CustomerSupportKB"
+              },
+              "parameterOverrides": []
             }
           ]
         }

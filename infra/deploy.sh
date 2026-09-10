@@ -25,6 +25,9 @@ fi
 export AWS_REGION
 
 ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+
+# need to pre-create two follow buckets for the knowledge base and one for the lambda artifact
+KBS3BUCKET="ecom-agent-extended-knowledge-base-${ACCOUNT_ID}-${AWS_REGION}"
 ARTIFACT_BUCKET="ecom-agent-extended-artifacts-${ACCOUNT_ID}-${AWS_REGION}"
 
 BUILD_DIR="$HERE/.build"
@@ -44,21 +47,6 @@ CODE_HASH="$(python3 -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[
 CODE_S3_KEY="order-tracker/${CODE_HASH}.zip"
 echo "==> packaged $(basename "$ZIP_PATH") -> s3://${ARTIFACT_BUCKET}/${CODE_S3_KEY}"
 
-# ── Artifact bucket ────────────────────────────────────────────────────────
-if ! aws s3api head-bucket --bucket "$ARTIFACT_BUCKET" >/dev/null 2>&1; then
-  echo "==> creating artifact bucket $ARTIFACT_BUCKET"
-  if [[ "$AWS_REGION" == "us-east-1" ]]; then
-    # us-east-1 rejects a LocationConstraint; every other region requires one.
-    aws s3api create-bucket --bucket "$ARTIFACT_BUCKET" >/dev/null
-  else
-    aws s3api create-bucket --bucket "$ARTIFACT_BUCKET" \
-      --create-bucket-configuration "LocationConstraint=$AWS_REGION" >/dev/null
-  fi
-  aws s3api put-public-access-block --bucket "$ARTIFACT_BUCKET" \
-    --public-access-block-configuration \
-    "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true" >/dev/null
-fi
-
 aws s3 cp "$ZIP_PATH" "s3://${ARTIFACT_BUCKET}/${CODE_S3_KEY}" --only-show-errors
 
 # ── Deploy ─────────────────────────────────────────────────────────────────
@@ -72,9 +60,25 @@ aws cloudformation deploy \
     "StageName=$STAGE_NAME" \
     "CodeS3Bucket=$ARTIFACT_BUCKET" \
     "CodeS3Key=$CODE_S3_KEY" \
-    "ApiAuthorizationType=$API_AUTH_TYPE"
+    "ApiAuthorizationType=$API_AUTH_TYPE"\
+    "KBS3Buckett=$KBS3BUCKET"
 
 echo
 echo "==> outputs"
 aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
   --query 'Stacks[0].Outputs[].[OutputKey,OutputValue]' --output table
+
+# if the stack deployment failed, the S3 bucket may not have been created, so don't try to copy the knowledge base
+if ! aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+  --query 'Stacks[0].StackStatus' --output text | grep -qE 'CREATE_COMPLETE|UPDATE_COMPLETE'; then
+  echo "==> stack deployment failed, skipping knowledge base upload"
+  exit 1
+fi
+
+# if the stack was just created, the S3 bucket may not be ready yet, so wait for it
+aws s3api wait bucket-exists --bucket "$KBS3BUCKET"
+
+# copy the knowledge base to the S3 bucket created by the stack, so the Lambda can read it
+
+# ── Copy KB ────────────────────────────────────────────────────────────────
+aws s3 cp "$ROOT/data/product_catalog.txt" "s3://${KBS3BUCKET}" --only-show-errors

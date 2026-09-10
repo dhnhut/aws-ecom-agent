@@ -89,7 +89,7 @@ fresh snapshot is created and the stage repoints at it.
 
 ## Agentcore Gateway
 
-Name `CustomerSupportGateway` with 02 targets
+Name `CustomerSupportGateway` with 03 targets
 
 ### `order-tracker`
 
@@ -143,6 +143,72 @@ Two things this target type demands:
 
 The gateway routes by tool name, passing `"refund-processor___<tool>"` in the
 Lambda client context; the handler strips the prefix and branches on the rest.
+
+### `customer-support-kb`
+
+A `connector` target that exposes the `CustomerSupportKB` knowledge base
+(below) as gateway tools. `knowledgeBaseId` holds the *project* KB name, not a
+Bedrock ID — the CDK resolves it to the real ID at synth time and grants the
+gateway role `bedrock:Retrieve` on that KB.
+
+```jsonc
+{
+  "name": "customer-support-kb",
+  "targetType": "connector",
+  "connectorId": "bedrock-knowledge-bases",
+  "configurations": [
+    { "name": "AgenticRetrieveStream", "parameterValues": { "retrievers": [ /* ... */ ] } },
+    { "name": "Retrieve", "parameterValues": { "knowledgeBaseId": "CustomerSupportKB" } }
+  ]
+}
+```
+
+Each configuration name becomes a tool, so the agent sees
+`customer-support-kb___Retrieve` (one lookup) and
+`customer-support-kb___AgenticRetrieveStream` (multi-step, planned retrieval
+across documents). To point at a KB this project does *not* own, put its literal
+10-character Bedrock KB ID in `knowledgeBaseId` instead of a name.
+
+Add the target with:
+
+```bash
+agentcore add gateway-target --name customer-support-kb --gateway CustomerSupportGateway \
+  --type connector --connector bedrock-knowledge-bases --knowledge-base-id CustomerSupportKB
+```
+
+## Knowledge Base
+
+`CustomerSupportKB` is a managed Bedrock Knowledge Base declared in
+`knowledgeBases[]`. AgentCore owns the KB, its data source, and its IAM service
+role; ingestion embeds with `amazon.titan-embed-text-v2:0`.
+
+```jsonc
+{
+  "type": "AgentCoreKnowledgeBase",
+  "name": "CustomerSupportKB",
+  "description": "...",                 // surfaced for tool discovery
+  "dataSources": [
+    { "type": "S3", "uri": "s3://ecom-agent-extended-knowledge-base-<account>-<region>" }
+  ]
+}
+```
+
+The source bucket is created by the `infra/` stack, and `infra/deploy.sh` copies
+`data/product_catalog.txt` into it. Note the KB's `gateway` field is accepted by
+the schema but ignored by the current CDK constructs — the `customer-support-kb`
+connector target above is what actually wires retrieval.
+
+Ingestion does **not** run on deploy. After the bucket contents change:
+
+```bash
+agentcore run ingest        # fresh ingestion job for every data source on the KB
+```
+
+The agent reaches the KB purely through the gateway MCP client it already
+builds in `app/EcomCS/mcp_client/client.py` — there is no KB ID environment
+variable and no direct `bedrock-agent-runtime` call in the agent. Its system
+prompt in `app/EcomCS/main.py` is what tells it to retrieve before answering
+product, policy, or troubleshooting questions.
 
 ## Agentcore CLI
 
