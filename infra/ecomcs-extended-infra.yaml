@@ -1,0 +1,253 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  order-tracker Lambda plus the REST API that fronts it. Deployed outside
+  AgentCore because an AgentCore gateway target of type `apiGateway` can only
+  attach to an existing REST API (it needs restApiId + stage), never create one.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: Ecom
+    Description: Prefix for the function and API names.
+    AllowedPattern: "^[A-Za-z][A-Za-z0-9-]{0,32}$"
+
+  StageName:
+    Type: String
+    Default: prod
+    Description: REST API stage. Feeds the `stage` field of the AgentCore apiGateway target.
+    AllowedPattern: "^[A-Za-z0-9_-]{1,64}$"
+
+  CodeS3Bucket:
+    Type: String
+    Description: Bucket holding the packaged Lambda zip. Set by infra/deploy.sh.
+
+  CodeS3Key:
+    Type: String
+    Description: Key of the packaged Lambda zip. Content-hashed so a code change forces an update.
+
+  LambdaRuntime:
+    Type: String
+    Default: python3.13
+    AllowedValues: [python3.11, python3.12, python3.13]
+
+  ApiAuthorizationType:
+    Type: String
+    Default: NONE
+    AllowedValues: [NONE, AWS_IAM]
+    Description: >-
+      NONE leaves the API public. Use AWS_IAM when the AgentCore gateway target
+      is configured with outboundAuth type GATEWAY_IAM_ROLE.
+
+  LogRetentionInDays:
+    Type: Number
+    Default: 14
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 180, 365]
+
+Resources:
+  # ── Lambda ────────────────────────────────────────────────────────────────
+  OrderTrackerLogGroup:
+    Type: AWS::Logs::LogGroup
+    # Declared explicitly (rather than letting Lambda auto-create it) so retention
+    # is managed and the group is deleted with the stack. The name must match the
+    # function name exactly or Lambda creates a second, unmanaged group.
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-order-tracker"
+      RetentionInDays: !Ref LogRetentionInDays
+
+  OrderTrackerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-order-tracker-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+
+  OrderTrackerFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: OrderTrackerLogGroup
+    Properties:
+      FunctionName: !Sub "${ProjectName}-order-tracker"
+      Description: Order and customer lookup behind the REST API proxy integration.
+      Runtime: !Ref LambdaRuntime
+      Handler: order_tracker.lambda_handler
+      Role: !GetAtt OrderTrackerRole.Arn
+      Timeout: 10
+      MemorySize: 256
+      Code:
+        S3Bucket: !Ref CodeS3Bucket
+        S3Key: !Ref CodeS3Key
+
+  ApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt OrderTrackerFunction.Arn
+      Principal: apigateway.amazonaws.com
+      # Any stage, but only the three GET routes this API exposes.
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApi}/*/GET/*"
+
+  # ── REST API ──────────────────────────────────────────────────────────────
+  RestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${ProjectName}-order-tracker-api"
+      Description: Proxy to the order-tracker Lambda.
+      EndpointConfiguration:
+        Types: [REGIONAL]
+
+  # /orders
+  OrdersResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RestApi
+      ParentId: !GetAtt RestApi.RootResourceId
+      PathPart: orders
+
+  # /orders/{order_id}
+  OrderIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RestApi
+      ParentId: !Ref OrdersResource
+      PathPart: "{order_id}"
+
+  # /customers
+  CustomersResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RestApi
+      ParentId: !GetAtt RestApi.RootResourceId
+      PathPart: customers
+
+  # /customers/{customer_id}
+  CustomerIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RestApi
+      ParentId: !Ref CustomersResource
+      PathPart: "{customer_id}"
+
+  # /customers/{customer_id}/orders
+  CustomerOrdersResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RestApi
+      ParentId: !Ref CustomerIdResource
+      PathPart: orders
+
+  # ── Methods ───────────────────────────────────────────────────────────────
+  # AWS_PROXY integrations always use POST as the integration method regardless
+  # of the route's own method; the handler reads `resource` and `httpMethod`
+  # off the proxy event to route.
+  GetOrderMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestApi
+      ResourceId: !Ref OrderIdResource
+      HttpMethod: GET
+      AuthorizationType: !Ref ApiAuthorizationType
+      OperationName: get_order
+      RequestParameters:
+        method.request.path.order_id: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OrderTrackerFunction.Arn}/invocations"
+
+  GetCustomerOrdersMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestApi
+      ResourceId: !Ref CustomerOrdersResource
+      HttpMethod: GET
+      AuthorizationType: !Ref ApiAuthorizationType
+      OperationName: get_customer_orders
+      RequestParameters:
+        method.request.path.customer_id: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OrderTrackerFunction.Arn}/invocations"
+
+  GetCustomerMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestApi
+      ResourceId: !Ref CustomerIdResource
+      HttpMethod: GET
+      AuthorizationType: !Ref ApiAuthorizationType
+      OperationName: get_customer
+      RequestParameters:
+        method.request.path.customer_id: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OrderTrackerFunction.Arn}/invocations"
+
+  # ── Deployment + stage ────────────────────────────────────────────────────
+  # A Deployment is an immutable snapshot of the routes at create time. Editing
+  # the methods above does NOT refresh it — CloudFormation sees no property
+  # change and leaves the old snapshot in place. Whenever you add or change a
+  # route, bump this logical ID (ApiDeploymentV1 -> ApiDeploymentV2) so a fresh
+  # snapshot is created and the stage repoints at it.
+  ApiDeploymentV1:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - GetOrderMethod
+      - GetCustomerOrdersMethod
+      - GetCustomerMethod
+    Properties:
+      RestApiId: !Ref RestApi
+      Description: !Sub "Routes for ${ProjectName} order-tracker"
+
+  ApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref RestApi
+      DeploymentId: !Ref ApiDeploymentV1
+      StageName: !Ref StageName
+      Description: !Sub "${StageName} stage"
+      # Access logging is intentionally omitted: LoggingLevel on MethodSettings
+      # requires an account-wide AWS::ApiGateway::Account CloudWatch role, which
+      # would overwrite that shared account setting from this stack.
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          MetricsEnabled: true
+          ThrottlingBurstLimit: 50
+          ThrottlingRateLimit: 100
+
+Outputs:
+  RestApiId:
+    Description: Use as `apiGateway.restApiId` on the AgentCore gateway target.
+    Value: !Ref RestApi
+    Export:
+      Name: !Sub "${AWS::StackName}-RestApiId"
+
+  StageName:
+    Description: Use as `apiGateway.stage` on the AgentCore gateway target.
+    Value: !Ref StageName
+    Export:
+      Name: !Sub "${AWS::StackName}-StageName"
+
+  InvokeUrl:
+    Description: Base URL of the deployed stage.
+    Value: !Sub "https://${RestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${StageName}"
+    Export:
+      Name: !Sub "${AWS::StackName}-InvokeUrl"
+
+  FunctionName:
+    Value: !Ref OrderTrackerFunction
+    Export:
+      Name: !Sub "${AWS::StackName}-FunctionName"
+
+  FunctionArn:
+    Value: !GetAtt OrderTrackerFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-FunctionArn"

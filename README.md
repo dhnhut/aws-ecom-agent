@@ -1,11 +1,16 @@
 # AgentCore Project
 
-This project was created with the [AgentCore CLI](https://github.com/aws/agentcore-cli).
+This project aim to build a customer support chatbot using AWS Bedrock AgentCore.
+
+The agent can access tool through Bedrock Gateway, Knowledgebase, Longterm memory, and searching the internet.
 
 ## Project Structure
 
+This project was initially created with the [AgentCore CLI](https://github.com/aws/agentcore-cli).
+
 ```
-my-project/
+aws-ecom-agent/
+├── .devcontainer /         # vs code devcontainer env
 ├── AGENTS.md               # AI coding assistant context
 ├── agentcore/
 │   ├── agentcore.json      # Project config (agents, memories, credentials, gateways, evaluators)
@@ -16,7 +21,9 @@ my-project/
 │   │   └── aws-targets.ts  # Deployment target types
 │   └── cdk/                # CDK infrastructure (@aws/agentcore-cdk)
 ├── app/                    # Agent application code
-└── evaluators/             # Custom evaluator code (if any)
+├── evaluators/             # Custom evaluator code (if any)
+├── lambda/                 # Business logic
+└── infra/                  # Infrastructure outside of AgentCore
 ```
 
 ## Getting Started
@@ -27,6 +34,73 @@ my-project/
 - **Python 3.10+** and **uv** for Python agents ([install uv](https://docs.astral.sh/uv/getting-started/installation/))
 - **AWS credentials** configured (`aws configure` or environment variables)
 - **Docker** (only for Container build agents)
+
+
+## Support Infrastructure
+
+### Lambda functions for tool
+
+- `order-tracker` — deployed by `infra/` (see below), reached through API Gateway
+- `refund-processor` — deployed by AgentCore as a `lambda` gateway target
+
+### APIGateway
+
+A REST API that proxies to the `order-tracker` Lambda with three routes:
+
+| Method and Resource | Operation Name |
+| -- | -- |
+| `GET /orders/{order_id}` | `get_order` |
+| `GET /customers/{customer_id}/orders` | `get_customer_orders` |
+| `GET /customers/{customer_id}` | `get_customer` |
+
+This lives outside AgentCore because an AgentCore gateway target of type
+`apiGateway` can only attach to an *existing* REST API — it takes `restApiId`
+and `stage` and never provisions one.
+
+### `infra/` stack
+
+Plain CloudFormation (no CDK), covering the `order-tracker` Lambda, its IAM role
+and log group, the REST API, and the `prod` stage.
+
+| File | Purpose |
+| -- | -- |
+| `infra/order-tracker-api.yaml` | The CloudFormation template |
+| `infra/deploy.sh` | Zips the Lambda, uploads it to S3, deploys the stack |
+
+```bash
+./infra/deploy.sh
+```
+
+The Lambda source is over the 4096-byte limit for inline `Code.ZipFile`, so the
+template reads it from S3; `deploy.sh` handles packaging, creates the artifact
+bucket on first run, and prints the stack outputs.
+
+- `STACK_NAME`=`ecomcs-extended-infra`
+- `STAGE_NAME`=`prod`
+- `PROJECT_NAME`=`EcomCS-Extra-Infra`
+- `API_AUTH_TYPE`=`NONE`
+- `ARTIFACT_BUCKET`=`ecom-agent-extended-artifacts-${ACCOUNT_ID}-${AWS_REGION}`
+- `ACCOUNT_ID` and `AWS_REGION` are read from `agentcore/aws-targets.json`
+
+An API Gateway deployment + stage is an immutable snapshot of the routes. When you add
+or change a route, bump the `ApiDeploymentV1` logical ID in the template so a
+fresh snapshot is created and the stage repoints at it.
+
+Wire the stack outputs into the AgentCore gateway target:
+
+```jsonc
+{
+  "name": "order-tracker",
+  "targetType": "apiGateway",
+  "apiGateway": {
+    "restApiId": "<RestApiId output>",
+    "stage": "<StageName output>",
+    "apiGatewayToolConfiguration": { "toolFilters": [ /* ... */ ] }
+  }
+}
+```
+
+## Agentcore CLI
 
 ### Development
 
