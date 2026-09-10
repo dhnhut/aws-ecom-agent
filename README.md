@@ -86,7 +86,14 @@ An API Gateway deployment + stage is an immutable snapshot of the routes. When y
 or change a route, bump the `ApiDeploymentV1` logical ID in the template so a
 fresh snapshot is created and the stage repoints at it.
 
-Wire the stack outputs into the AgentCore gateway target:
+
+## Agentcore Gateway
+
+Name `CustomerSupportGateway` with 02 targets
+
+### `order-tracker`
+
+Wire the `API gateway` outputs from the infra stack into the AgentCore gateway target:
 
 ```jsonc
 {
@@ -99,6 +106,43 @@ Wire the stack outputs into the AgentCore gateway target:
   }
 }
 ```
+
+### `refund-processor`
+
+A `lambda` target: AgentCore builds and deploys the function itself from
+`lambda/refund_processor/`, then points the gateway at it.
+
+```jsonc
+{
+  "name": "refund-processor",
+  "targetType": "lambda",
+  "compute": {
+    "host": "Lambda",
+    "implementation": {
+      "language": "Python",
+      "path": "lambda/refund_processor/",       // relative to the repo root
+      "handler": "refund_processor.lambda_handler"
+    },
+    "pythonVersion": "PYTHON_3_13"
+  },
+  "outboundAuth": { "type": "NONE" },
+  "toolDefinitions": [ /* initiate_refund, check_refund_status, get_return_label */ ]
+}
+```
+
+Two things this target type demands:
+
+- **Tool definitions are inline.** Only `lambdaFunctionArn` targets (which attach
+  to an *already deployed* function by ARN) read a `toolSchemaFile`. The
+  `toolDefinitions` array in `agentcore.json` is copied verbatim from
+  `lambda/refund_processor/lambda_schema.txt`; edit the schema file, then mirror
+  the change into the config.
+- **`pyproject.toml` must exist** in the code location. Deployment runs
+  `uv pip install -r pyproject.toml` over that directory before zipping it, and
+  fails without one even though the handler is pure standard library.
+
+The gateway routes by tool name, passing `"refund-processor___<tool>"` in the
+Lambda client context; the handler strips the prefix and branches on the rest.
 
 ## Agentcore CLI
 

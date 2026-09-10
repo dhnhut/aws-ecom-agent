@@ -1,0 +1,14 @@
+# Required by the AgentCore packager. `agentcore deploy` runs
+# `uv pip install -r pyproject.toml --target <staging>` against this directory
+# and then copies the sources next to the installed deps, so the file has to
+# exist even when there is nothing to install — without it packaging fails with
+# MissingProjectFileError before CloudFormation is ever reached.
+#
+# refund_processor.py imports only the standard library, hence the empty
+# dependency list.
+[project]
+name = "refund-processor"
+version = "0.1.0"
+description = "Refund tools Lambda behind the CustomerSupportGateway"
+requires-python = ">=3.13"
+dependencies = []
