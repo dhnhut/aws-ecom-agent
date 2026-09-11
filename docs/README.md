@@ -89,6 +89,10 @@ Code includes a `BedrockAgentCoreApp` instance created at module level.
 - Code includes a fallback path that computes a tier-only discount when the code interpreter is unavailable.
 - The tool returns a structured result containing all of the following fields: `points_redeemed`, `tier_discount_pct`, `final_total`, `remaining_points`.
 
+![alt text](images/05_ltm_test.png)
+
+![alt text](images/05_trace.png)
+
 #### 6. Enable web browsing capabilities through a browser tool
 
 - Code instantiates `AgentCoreBrowser` with the AWS region.
