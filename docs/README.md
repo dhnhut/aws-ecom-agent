@@ -172,4 +172,6 @@ To execute all test
 ./test.sh
 ```
 
+Note: Detail logs for each invoke can be found `./agentcore/.cli/logs/invoke/invoke-EcomCS-<timestamp>.log`
+
 ![run tesh.sh](images/run_test.png)
