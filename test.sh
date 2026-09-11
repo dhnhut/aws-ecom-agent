@@ -55,7 +55,7 @@ echo "=== Test 5 — Loyalty Discount Calculation ==="
 echo "Expected: points redeemed, tier discount 10%, correct final total, remaining points"
 echo "---"
 
-agentcore invoke --prompt "I am a Gold member with 4250 points. Calculate my discount on a $150 standard order." --user-id CUST-123 --session-id 00000000-0000-0000-0000-000000000005
+agentcore invoke --prompt "I am a Gold loyalty tier member with 4250 points. Calculate my discount on a \$150 standard order." --user-id CUST-123 --session-id 00000000-0000-0000-0000-000000000005
 echo
 
 # # ===

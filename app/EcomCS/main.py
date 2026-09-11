@@ -20,7 +20,7 @@ DEFAULT_SYSTEM_PROMPT = """
 ## Use tools when appropriate.
 
 ### Knowledge Base
-Product, policy and troubleshooting questions are answered from the
+Product, policy, loyalty member, and troubleshooting questions are answered from the
 CustomerSupportKB knowledge base, reachable as the `customer-support-kb___Retrieve`
 and `customer-support-kb___AgenticRetrieveStream` tools on the support gateway.
 Retrieve before you answer any question about product specs, pricing, warranty
@@ -157,7 +157,9 @@ async def invoke(payload, context):
     log.info("Context: %s", context)
 
     session_id = getattr(context, 'session_id', 'default-session')
-    user_id = getattr(context, 'user_id', 'default-user')
+    user_id = payload.get("user_id") or getattr(
+        context, "user_id", None) or "default-user"
+
     agent = get_or_create_agent(session_id, user_id)
 
     prompt = _extract_prompt(payload)

@@ -17,11 +17,18 @@ def get_memory_session_manager(session_id: Optional[str], actor_id: str) -> Opti
     # without a runtime session header, so synthesize one when absent.
     session_id = session_id or uuid.uuid4().hex
 
+    # Relevance scores in this store cluster in the 0.34-0.40 band, so a stable
+    # identity fact ("the user's name is ...") ranks below incidental order chatter
+    # on most queries. Keep top_k generous or the durable facts get dropped.
     retrieval_config = {
-        f"/users/{actor_id}/facts": RetrievalConfig(top_k=3, relevance_score=0.5),
-        f"/users/{actor_id}/preferences": RetrievalConfig(top_k=3, relevance_score=0.5),
-        f"/episodes/{actor_id}/{session_id}": RetrievalConfig(top_k=5, relevance_score=0.5),
-        f"/summaries/{actor_id}": RetrievalConfig(top_k=3, relevance_score=0.5),
+        f"/users/{actor_id}/facts": RetrievalConfig(top_k=10, relevance_score=0.1),
+        f"/users/{actor_id}/preferences": RetrievalConfig(top_k=8, relevance_score=0.1),
+        # The episodic strategy writes raw episodes per session and reflections to
+        # /episodes/{actorId}; only the reflections survive across sessions.
+        f"/episodes/{actor_id}": RetrievalConfig(top_k=5, relevance_score=0.1),
+        # SUMMARIZATION writes to /summaries/{actorId}/{sessionId} - the session
+        # segment is part of the namespace and retrieval does not prefix-match.
+        f"/summaries/{actor_id}/{session_id}": RetrievalConfig(top_k=3, relevance_score=0.1),
     }
 
     return AgentCoreMemorySessionManager(
