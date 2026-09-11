@@ -15,7 +15,13 @@
       "codeLocation": "app/EcomCS/",
       "runtimeVersion": "PYTHON_3_14",
       "networkMode": "PUBLIC",
-      "protocol": "HTTP"
+      "protocol": "HTTP",
+      "connections": [
+        {
+          "to": { "type": "codeInterpreter" },
+          "description": "Sandbox for calculate_loyalty_discount arithmetic"
+        }
+      ]
     }
   ],
   "memories": [

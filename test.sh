@@ -27,8 +27,8 @@ echo "---"
 agentcore invoke --prompt "What are the benefits of the Platinum loyalty tier?" --user-id CUST-123 --session-id 00000000-0000-0000-0000-000000000003
 echo
 
-# # ===
-# # Test 4 — Long-Term Memory (two sessions)
+# ===
+# Test 4 — Long-Term Memory (two sessions)
 echo "=================================="
 echo "=== Test 4 — Long-Term Memory (two sessions) ==="
 echo "Expected: agent recalls previous interactions and maintains context across sessions."
@@ -48,8 +48,8 @@ echo "Memory extraction complete."
 agentcore invoke --prompt "Do you remember my name and communication preference?" --user-id CUST-123 --session-id 00000000-0000-0000-0000-000000000042
 echo
 
-# # ===
-# # Test 5 — Loyalty Discount Calculation
+# ===
+# Test 5 — Loyalty Discount Calculation
 echo "=================================="
 echo "=== Test 5 — Loyalty Discount Calculation ==="
 echo "Expected: points redeemed, tier discount 10%, correct final total, remaining points"
@@ -58,8 +58,8 @@ echo "---"
 agentcore invoke --prompt "I am a Gold loyalty tier member with 4250 points. Calculate my discount on a \$150 standard order." --user-id CUST-123 --session-id 00000000-0000-0000-0000-000000000005
 echo
 
-# # ===
-# # Test 6 — Browser Tool
+# ===
+# Test 6 — Browser Tool
 echo "=================================="
 echo "=== Test 6 — Browser Tool ==="
 echo "Expected: page title retrieved from the live udacity.com page"
