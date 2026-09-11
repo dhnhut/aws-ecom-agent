@@ -141,3 +141,35 @@ Code includes a `BedrockAgentCoreApp` instance created at module level.
 >   - Longterm memory (fact/preferences/episodes/summaries) using similarity search (k-means).  
 >   - Code intepreter tool to allow agent execute/call function to get result.  
 >   - Browser tool, to access internet for up-to-date data.  
+
+
+## Reporducing
+
+### Command update
+
+In course, which old Starter Toolkit CLI is used
+
+```sh
+# old Starter Toolkit, so as course material
+agentcore invoke '{"prompt": "I am a Gold member with 4250 points. Calculate my discount on a $150 standard order.", "customer_id": "CUST-123", "session_id": "t5"}'
+```
+
+In this project, the up-to-date `Agentcore CLI` change to:
+
+```sh
+# run `agentcore invoke --help` for mor information
+agentcore invoke --prompt "I am a Gold loyalty tier member with 4250 points. Calculate my discount on a \$150 standard order." --user-id CUST-123 --session-id 00000000-0000-0000-0000-000000000005
+```
+
+### Testing script
+
+All test in include in [test.sh](../test.sh)
+
+To execute all test
+
+```sh
+# In root folder
+./test.sh
+```
+
+![run tesh.sh](images/run_test.png)
